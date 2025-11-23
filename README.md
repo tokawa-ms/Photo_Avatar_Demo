@@ -19,6 +19,10 @@
   <a href="#license">License</a>
 </p>
 
+<p align="center">
+  🌐 Looking for the English documentation? Read the <a href="./README-en.md">English README</a>.
+</p>
+
 ---
 
 ## Overview
