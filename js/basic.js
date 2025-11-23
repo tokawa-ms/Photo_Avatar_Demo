@@ -46,6 +46,9 @@ let loggingElement = null
 let logPlaceholderElement = null
 let masterLogFilterElement = null
 let consoleMirroringInitialized = false
+let currentAvatarMaxWidth = '960px'
+let currentAvatarFrameWidth = 1920
+let currentAvatarFrameHeight = 1080
 const originalConsole = {
     log: console.log ? console.log.bind(console) : () => {},
     info: console.info ? console.info.bind(console) : (console.log ? console.log.bind(console) : () => {}),
@@ -407,14 +410,68 @@ function hideRemoteVideo() {
     }
 }
 
-function setVideoElementDimensions(videoElement) {
+function applyCanvasDimensions() {
+    const canvas = document.getElementById('canvas')
+    if (!canvas) {
+        return
+    }
+
+    canvas.classList.add('avatar-video')
+    canvas.style.maxWidth = currentAvatarMaxWidth
+    canvas.style.width = '100%'
+    canvas.style.height = 'auto'
+    canvas.style.aspectRatio = `${currentAvatarFrameWidth} / ${currentAvatarFrameHeight}`
+}
+
+function syncCanvasWithVideoDimensions(videoElement) {
     if (!videoElement) {
         return
     }
 
+    const width = videoElement.videoWidth || currentAvatarFrameWidth
+    const height = videoElement.videoHeight || currentAvatarFrameHeight
+
+    if (!width || !height) {
+        return
+    }
+
+    currentAvatarFrameWidth = width
+    currentAvatarFrameHeight = height
+
+    const canvas = document.getElementById('canvas')
+    const tmpCanvas = document.getElementById('tmpCanvas')
+
+    if (canvas) {
+        if (canvas.width !== width) {
+            canvas.width = width
+        }
+        if (canvas.height !== height) {
+            canvas.height = height
+        }
+        canvas.style.aspectRatio = `${width} / ${height}`
+    }
+
+    if (tmpCanvas) {
+        if (tmpCanvas.width !== width) {
+            tmpCanvas.width = width
+        }
+        if (tmpCanvas.height !== height) {
+            tmpCanvas.height = height
+        }
+    }
+
+    applyCanvasDimensions()
+}
+
+function setVideoElementDimensions(videoElement) {
     const isPhotoAvatar = document.getElementById('photoAvatar')?.checked
-    videoElement.classList.add('avatar-video')
-    videoElement.style.maxWidth = isPhotoAvatar ? '512px' : '960px'
+    currentAvatarMaxWidth = isPhotoAvatar ? '512px' : '960px'
+    if (videoElement) {
+        videoElement.classList.add('avatar-video')
+        videoElement.style.maxWidth = currentAvatarMaxWidth
+        syncCanvasWithVideoDimensions(videoElement)
+    }
+    applyCanvasDimensions()
 }
 
 function resetVideoContainer() {
@@ -445,6 +502,7 @@ function resetVideoContainer() {
         const context = canvas.getContext('2d')
         context?.clearRect(0, 0, canvas.width, canvas.height)
         canvas.hidden = true
+        applyCanvasDimensions()
     }
 }
 
@@ -491,12 +549,18 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
             setVideoElementDimensions(mediaPlayer)
             const canvas = document.getElementById('canvas')
 
+            mediaPlayer.addEventListener('loadedmetadata', () => {
+                syncCanvasWithVideoDimensions(mediaPlayer)
+            })
+
             if (document.getElementById('transparentBackground').checked) {
                 hideRemoteVideo()
                 if (canvas) {
                     const context = canvas.getContext('2d')
                     context?.clearRect(0, 0, canvas.width, canvas.height)
                     canvas.hidden = false
+                    syncCanvasWithVideoDimensions(mediaPlayer)
+                    applyCanvasDimensions()
                 }
             } else {
                 showRemoteVideo()
@@ -506,6 +570,7 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
             }
 
             mediaPlayer.addEventListener('play', () => {
+                syncCanvasWithVideoDimensions(mediaPlayer)
                 if (document.getElementById('transparentBackground').checked) {
                     window.requestAnimationFrame(makeBackgroundTransparent)
                 }
@@ -592,6 +657,13 @@ function makeBackgroundTransparent(timestamp) {
     if (timestamp - previousAnimationFrameTimestamp > 30) {
         video = document.getElementById('video')
         tmpCanvas = document.getElementById('tmpCanvas')
+        syncCanvasWithVideoDimensions(video)
+        if (!tmpCanvas || !video) {
+            previousAnimationFrameTimestamp = timestamp
+            window.requestAnimationFrame(makeBackgroundTransparent)
+            return
+        }
+
         tmpCanvasContext = tmpCanvas.getContext('2d', { willReadFrequently: true })
         tmpCanvasContext.drawImage(video, 0, 0, video.videoWidth, video.videoHeight)
         if (video.videoWidth > 0) {
@@ -791,6 +863,7 @@ window.onload = () => {
     resetVideoContainer()
     initSettingsPersistence()
     updateLogPlaceholderVisibility()
+    applyCanvasDimensions()
 }
 
 window.updataTransparentBackground = () => {
@@ -813,6 +886,7 @@ window.updataTransparentBackground = () => {
             canvas.hidden = false
         }
         hideRemoteVideo()
+        applyCanvasDimensions()
     } else {
         document.body.style.backgroundImage = ''
         document.body.style.backgroundColor = ''
@@ -825,6 +899,7 @@ window.updataTransparentBackground = () => {
             canvas.hidden = true
         }
         showRemoteVideo()
+        applyCanvasDimensions()
     }
 
     if (!initializingSettings) {
@@ -866,6 +941,7 @@ window.updatePhotoAvatarBox = () => {
     if (videoElement) {
         setVideoElementDimensions(videoElement)
     }
+    applyCanvasDimensions()
 }
 
 window.updateCustomAvatarBox = () => {

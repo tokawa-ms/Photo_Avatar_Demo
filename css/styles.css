@@ -247,6 +247,10 @@ ul {
     margin: 0 auto;
 }
 
+canvas.avatar-video {
+    background-color: transparent;
+}
+
 .log-entry {
     display: flex;
     flex-direction: column;
