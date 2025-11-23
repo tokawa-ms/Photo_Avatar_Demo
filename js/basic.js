@@ -6,10 +6,446 @@ var avatarSynthesizer
 var peerConnection
 var useTcpForWebRTC = false
 var previousAnimationFrameTimestamp = 0;
+const storagePrefix = 'talkingAvatarBasic.'
+const persistedSettings = [
+    { id: 'region' },
+    { id: 'APIKey', event: 'input' },
+    { id: 'enablePrivateEndpoint', type: 'checkbox' },
+    { id: 'privateEndpoint', event: 'input' },
+    { id: 'ttsVoice', event: 'input' },
+    { id: 'customVoiceEndpointId', event: 'input' },
+    { id: 'talkingAvatarCharacter', event: 'input' },
+    { id: 'talkingAvatarStyle', event: 'input' },
+    { id: 'backgroundColor', event: 'input' },
+    { id: 'backgroundImageUrl', event: 'input' },
+    { id: 'photoAvatar', type: 'checkbox' },
+    { id: 'customizedAvatar', type: 'checkbox' },
+    { id: 'useBuiltInVoice', type: 'checkbox' },
+    { id: 'transparentBackground', type: 'checkbox' },
+    { id: 'videoCrop', type: 'checkbox' },
+    { id: 'showSubtitles', type: 'checkbox' },
+    { id: 'spokenText', event: 'input' }
+]
+const persistedSettingsMap = {}
+persistedSettings.forEach((setting) => {
+    persistedSettingsMap[setting.id] = setting
+})
+let localStorageEnabled = false
+let initializingSettings = false
 
-// Logger
-const log = msg => {
-    document.getElementById('logging').innerHTML += msg + '<br>'
+const LOG_LEVELS = [ 'info', 'warn', 'error' ]
+const LOG_LEVEL_LABELS = {
+    info: 'INFO',
+    warn: 'WARN',
+    error: 'ERROR'
+}
+const logEntries = []
+let activeLogLevels = new Set(LOG_LEVELS)
+const logFilters = {}
+let loggingElement = null
+let logPlaceholderElement = null
+let masterLogFilterElement = null
+let consoleMirroringInitialized = false
+const originalConsole = {
+    log: console.log ? console.log.bind(console) : () => {},
+    info: console.info ? console.info.bind(console) : (console.log ? console.log.bind(console) : () => {}),
+    warn: console.warn ? console.warn.bind(console) : (console.log ? console.log.bind(console) : () => {}),
+    error: console.error ? console.error.bind(console) : (console.log ? console.log.bind(console) : () => {}),
+    debug: console.debug ? console.debug.bind(console) : (console.log ? console.log.bind(console) : () => {})
+}
+
+function isLocalStorageAvailable() {
+    try {
+        const testKey = storagePrefix + '__test'
+        window.localStorage.setItem(testKey, '1')
+        window.localStorage.removeItem(testKey)
+        return true
+    } catch (error) {
+        console.warn('Local storage is not available.')
+        return false
+    }
+}
+
+function readStoredValue(key) {
+    try {
+        return window.localStorage.getItem(key)
+    } catch (error) {
+        console.warn('Failed to read local storage.')
+        return null
+    }
+}
+
+function writeStoredValue(key, value) {
+    try {
+        window.localStorage.setItem(key, value)
+    } catch (error) {
+        console.warn('Failed to write local storage.')
+    }
+}
+
+function persistSettingValueById(id) {
+    if (!localStorageEnabled) {
+        return
+    }
+
+    const setting = persistedSettingsMap[id]
+    if (!setting) {
+        return
+    }
+
+    const element = document.getElementById(id)
+    if (!element) {
+        return
+    }
+
+    const value = setting.type === 'checkbox' ? element.checked : element.value
+    const storedValue = setting.type === 'checkbox' ? String(value) : value
+    writeStoredValue(storagePrefix + id, storedValue)
+}
+
+function initSettingsPersistence() {
+    localStorageEnabled = isLocalStorageAvailable()
+    initializingSettings = true
+
+    persistedSettings.forEach((setting) => {
+        const element = document.getElementById(setting.id)
+        if (!element) {
+            return
+        }
+
+        const storageKey = storagePrefix + setting.id
+        const storedValue = localStorageEnabled ? readStoredValue(storageKey) : null
+        if (storedValue !== null) {
+            if (setting.type === 'checkbox') {
+                element.checked = storedValue === 'true'
+            } else {
+                element.value = storedValue
+            }
+        }
+
+        const eventName = setting.event || (setting.type === 'checkbox' ? 'change' : 'change')
+        element.addEventListener(eventName, () => {
+            persistSettingValueById(setting.id)
+        })
+    })
+    window.updatePrivateEndpoint()
+    window.updateCustomAvatarBox()
+    window.updataTransparentBackground()
+    initializingSettings = false
+}
+
+function obtainLoggingElements() {
+    if (!loggingElement) {
+        loggingElement = document.getElementById('logging')
+    }
+    if (!logPlaceholderElement) {
+        logPlaceholderElement = document.getElementById('logPlaceholder')
+    }
+}
+
+function formatLogArguments(parts) {
+    return parts
+        .map((part) => {
+            if (part instanceof Error) {
+                return part.stack || part.message || String(part)
+            }
+            if (part === undefined || part === null) {
+                return ''
+            }
+            if (typeof part === 'string') {
+                return part
+            }
+            if (typeof part === 'number' || typeof part === 'boolean') {
+                return String(part)
+            }
+            try {
+                return JSON.stringify(part)
+            } catch (error) {
+                return String(part)
+            }
+        })
+        .filter((value) => value !== '')
+        .join(' ')
+        .trim()
+}
+
+function formatLogTimestamp(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return ''
+    }
+
+    return date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function ensureLogEntryElement(entry) {
+    obtainLoggingElements()
+    if (!loggingElement || entry.element) {
+        return
+    }
+
+    const wrapper = document.createElement('div')
+    wrapper.className = `log-entry log-entry-${entry.level}`
+    wrapper.dataset.logLevel = entry.level
+
+    const header = document.createElement('div')
+    header.className = 'log-entry-header'
+
+    const badge = document.createElement('span')
+    badge.className = `log-level-badge log-level-badge-${entry.level}`
+    badge.textContent = LOG_LEVEL_LABELS[entry.level] || entry.level.toUpperCase()
+
+    const timestamp = document.createElement('span')
+    timestamp.className = 'log-entry-timestamp'
+    timestamp.textContent = formatLogTimestamp(entry.timestamp)
+
+    header.appendChild(badge)
+    header.appendChild(timestamp)
+
+    const message = document.createElement('div')
+    message.className = 'log-entry-message'
+    message.textContent = entry.message
+
+    wrapper.appendChild(header)
+    wrapper.appendChild(message)
+
+    if (loggingElement.firstChild) {
+        loggingElement.insertBefore(wrapper, loggingElement.firstChild)
+    } else {
+        loggingElement.appendChild(wrapper)
+    }
+    entry.element = wrapper
+}
+
+function applyLogFiltersToEntry(entry) {
+    entry.hiddenByFilter = !activeLogLevels.has(entry.level)
+    if (entry.element) {
+        entry.element.hidden = entry.hiddenByFilter
+    }
+}
+
+function scrollLogContainerToTop() {
+    if (!loggingElement) {
+        return
+    }
+
+    const scrollHost = loggingElement.parentElement || loggingElement
+    scrollHost.scrollTop = 0
+}
+
+function updateLogPlaceholderVisibility() {
+    obtainLoggingElements()
+    const hasEntries = logEntries.length > 0
+    const hasVisibleEntries = logEntries.some((entry) => !entry.hiddenByFilter)
+
+    if (loggingElement) {
+        loggingElement.hidden = !hasVisibleEntries
+    }
+
+    if (logPlaceholderElement) {
+        if (!hasEntries) {
+            logPlaceholderElement.textContent = 'Session and synthesis logs will appear here.'
+        } else if (!hasVisibleEntries) {
+            logPlaceholderElement.textContent = 'No log entries match the current filters.'
+        }
+        logPlaceholderElement.hidden = hasVisibleEntries
+    }
+}
+
+function applyLogLevelFilters() {
+    logEntries.forEach((entry) => {
+        ensureLogEntryElement(entry)
+        applyLogFiltersToEntry(entry)
+    })
+    updateLogPlaceholderVisibility()
+}
+
+function syncMasterLogFilterCheckbox() {
+    if (!masterLogFilterElement) {
+        return
+    }
+
+    const enabledCount = LOG_LEVELS.reduce((count, level) => count + (activeLogLevels.has(level) ? 1 : 0), 0)
+    masterLogFilterElement.checked = enabledCount === LOG_LEVELS.length
+    masterLogFilterElement.indeterminate = enabledCount > 0 && enabledCount < LOG_LEVELS.length
+}
+
+function emitLog(level, parts, options = {}) {
+    const message = formatLogArguments(parts)
+    if (!message) {
+        return
+    }
+
+    const entry = {
+        level,
+        message,
+        timestamp: options.timestamp instanceof Date ? options.timestamp : new Date(),
+        element: null,
+        hiddenByFilter: !activeLogLevels.has(level)
+    }
+
+    logEntries.push(entry)
+
+    ensureLogEntryElement(entry)
+    if (entry.element) {
+        applyLogFiltersToEntry(entry)
+        if (!entry.hiddenByFilter) {
+            scrollLogContainerToTop()
+        }
+    }
+
+    updateLogPlaceholderVisibility()
+
+    if (!options.skipConsole) {
+        const consoleFn = level === 'warn'
+            ? originalConsole.warn
+            : level === 'error'
+                ? originalConsole.error
+                : originalConsole.log
+        consoleFn(...parts)
+    }
+}
+
+const log = (msg) => {
+    emitLog('info', [ msg ])
+}
+
+function initializeLogUi() {
+    obtainLoggingElements()
+    loggingElement = document.getElementById('logging')
+    logPlaceholderElement = document.getElementById('logPlaceholder')
+    masterLogFilterElement = document.getElementById('logFilter-all')
+
+    LOG_LEVELS.forEach((level) => {
+        const checkbox = document.getElementById(`logFilter-${level}`)
+        if (!checkbox) {
+            return
+        }
+
+        logFilters[level] = checkbox
+        checkbox.checked = activeLogLevels.has(level)
+        checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+                activeLogLevels.add(level)
+            } else {
+                activeLogLevels.delete(level)
+            }
+            syncMasterLogFilterCheckbox()
+            applyLogLevelFilters()
+        })
+    })
+
+    if (masterLogFilterElement) {
+        masterLogFilterElement.checked = LOG_LEVELS.every((level) => activeLogLevels.has(level))
+        masterLogFilterElement.indeterminate = false
+        masterLogFilterElement.addEventListener('change', () => {
+            const checked = masterLogFilterElement.checked
+            masterLogFilterElement.indeterminate = false
+            activeLogLevels = checked ? new Set(LOG_LEVELS) : new Set()
+            LOG_LEVELS.forEach((level) => {
+                if (logFilters[level]) {
+                    logFilters[level].checked = checked
+                }
+            })
+            applyLogLevelFilters()
+            syncMasterLogFilterCheckbox()
+        })
+    }
+
+    logEntries.forEach((entry) => {
+        ensureLogEntryElement(entry)
+    })
+    applyLogLevelFilters()
+    syncMasterLogFilterCheckbox()
+}
+
+function setupConsoleMirroring() {
+    if (consoleMirroringInitialized) {
+        return
+    }
+
+    consoleMirroringInitialized = true
+
+    console.log = (...args) => {
+        emitLog('info', args, { skipConsole: true })
+        originalConsole.log(...args)
+    }
+
+    console.info = (...args) => {
+        emitLog('info', args, { skipConsole: true })
+        originalConsole.info(...args)
+    }
+
+    console.debug = (...args) => {
+        emitLog('info', args, { skipConsole: true })
+        originalConsole.debug(...args)
+    }
+
+    console.warn = (...args) => {
+        emitLog('warn', args, { skipConsole: true })
+        originalConsole.warn(...args)
+    }
+
+    console.error = (...args) => {
+        emitLog('error', args, { skipConsole: true })
+        originalConsole.error(...args)
+    }
+}
+
+setupConsoleMirroring()
+
+function showRemoteVideo() {
+    const remoteVideo = document.getElementById('remoteVideo')
+    if (remoteVideo) {
+        remoteVideo.style.display = ''
+    }
+}
+
+function hideRemoteVideo() {
+    const remoteVideo = document.getElementById('remoteVideo')
+    if (remoteVideo) {
+        remoteVideo.style.display = 'none'
+    }
+}
+
+function setVideoElementDimensions(videoElement) {
+    if (!videoElement) {
+        return
+    }
+
+    const isPhotoAvatar = document.getElementById('photoAvatar')?.checked
+    videoElement.classList.add('avatar-video')
+    videoElement.style.maxWidth = isPhotoAvatar ? '512px' : '960px'
+}
+
+function resetVideoContainer() {
+    const remoteVideoDiv = document.getElementById('remoteVideo')
+    if (remoteVideoDiv) {
+        while (remoteVideoDiv.firstChild) {
+            remoteVideoDiv.removeChild(remoteVideoDiv.firstChild)
+        }
+        if (document.getElementById('transparentBackground')?.checked) {
+            hideRemoteVideo()
+        } else {
+            showRemoteVideo()
+        }
+    }
+
+    const overlay = document.getElementById('overlayArea')
+    if (overlay) {
+        overlay.hidden = true
+    }
+
+    const videoLabel = document.getElementById('videoLabel')
+    if (videoLabel) {
+        videoLabel.hidden = false
+    }
+
+    const canvas = document.getElementById('canvas')
+    if (canvas) {
+        const context = canvas.getContext('2d')
+        context?.clearRect(0, 0, canvas.width, canvas.height)
+        canvas.hidden = true
+    }
 }
 
 // Setup WebRTC
@@ -26,9 +462,12 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
 
     // Fetch WebRTC video stream and mount it to an HTML video element
     peerConnection.ontrack = function (event) {
-        // Clean up existing video element if there is any
-        remoteVideoDiv = document.getElementById('remoteVideo')
-        for (var i = 0; i < remoteVideoDiv.childNodes.length; i++) {
+        const remoteVideoDiv = document.getElementById('remoteVideo')
+        if (!remoteVideoDiv) {
+            return
+        }
+
+        for (let i = remoteVideoDiv.childNodes.length - 1; i >= 0; i--) {
             if (remoteVideoDiv.childNodes[i].localName === event.track.kind) {
                 remoteVideoDiv.removeChild(remoteVideoDiv.childNodes[i])
             }
@@ -38,38 +477,41 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
         mediaPlayer.id = event.track.kind
         mediaPlayer.srcObject = event.streams[0]
         mediaPlayer.autoplay = false
+        mediaPlayer.preload = 'auto'
         mediaPlayer.addEventListener('loadeddata', () => {
             mediaPlayer.play()
         })
 
-        document.getElementById('remoteVideo').appendChild(mediaPlayer)
+        remoteVideoDiv.appendChild(mediaPlayer)
         document.getElementById('videoLabel').hidden = true
         document.getElementById('overlayArea').hidden = false
 
         if (event.track.kind === 'video') {
             mediaPlayer.playsInline = true
-            remoteVideoDiv = document.getElementById('remoteVideo')
-            canvas = document.getElementById('canvas')
+            setVideoElementDimensions(mediaPlayer)
+            const canvas = document.getElementById('canvas')
+
             if (document.getElementById('transparentBackground').checked) {
-                remoteVideoDiv.style.width = '0.1px'
-                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
-                canvas.hidden = false
+                hideRemoteVideo()
+                if (canvas) {
+                    const context = canvas.getContext('2d')
+                    context?.clearRect(0, 0, canvas.width, canvas.height)
+                    canvas.hidden = false
+                }
             } else {
-                canvas.hidden = true
+                showRemoteVideo()
+                if (canvas) {
+                    canvas.hidden = true
+                }
             }
 
             mediaPlayer.addEventListener('play', () => {
                 if (document.getElementById('transparentBackground').checked) {
                     window.requestAnimationFrame(makeBackgroundTransparent)
-                } else {
-                    remoteVideoDiv.style.width = mediaPlayer.videoWidth / 2 + 'px'
                 }
             })
-        }
-        else
-        {
-            // Mute the audio player to make sure it can auto play, will unmute it when speaking
-            // Refer to https://developer.mozilla.org/en-US/docs/Web/Media/Autoplay_guide
+        } else {
+            mediaPlayer.style.display = 'none'
             mediaPlayer.muted = true
         }
     }
@@ -110,6 +552,7 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
             document.getElementById('stopSession').disabled = true
             document.getElementById('startSession').disabled = false
             document.getElementById('configuration').hidden = false
+            resetVideoContainer()
         }
     }
 
@@ -136,6 +579,7 @@ function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
     }).catch(
         (error) => {
             console.log("[" + (new Date()).toISOString() + "] Avatar failed to start. Error: " + error)
+            log("Avatar failed to start. " + error)
             document.getElementById('startSession').disabled = false
             document.getElementById('configuration').hidden = false
         }
@@ -239,6 +683,9 @@ window.startSession = () => {
     avatarConfig.backgroundImage = document.getElementById('backgroundImageUrl').value
 
     document.getElementById('startSession').disabled = true
+    document.getElementById('configuration').hidden = true
+    resetVideoContainer()
+    log('Starting avatar session...')
     
     const xhr = new XMLHttpRequest()
     if (privateEndpointEnabled) {
@@ -279,7 +726,10 @@ window.startSession = () => {
 window.speak = () => {
     document.getElementById('speak').disabled = true;
     document.getElementById('stopSpeaking').disabled = false
-    document.getElementById('audio').muted = false
+    const audioPlayer = document.getElementById('audio')
+    if (audioPlayer) {
+        audioPlayer.muted = false
+    }
     let spokenText = document.getElementById('spokenText').value
     let ttsVoice = document.getElementById('ttsVoice').value
     let spokenSsml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'><voice name='${ttsVoice}'><mstts:leadingsilence-exact value='0'/>${htmlEncode(spokenText)}</voice></speak>`
@@ -307,27 +757,78 @@ window.speak = () => {
 window.stopSpeaking = () => {
     document.getElementById('stopSpeaking').disabled = true
 
-    avatarSynthesizer.stopSpeakingAsync().then(
+    avatarSynthesizer.stopSpeakingAsync().then(() => {
         log("[" + (new Date()).toISOString() + "] Stop speaking request sent.")
-    ).catch(log);
+    }).catch(log)
 }
 
 window.stopSession = () => {
     document.getElementById('speak').disabled = true
     document.getElementById('stopSession').disabled = true
     document.getElementById('stopSpeaking').disabled = true
-    avatarSynthesizer.close()
+    document.getElementById('startSession').disabled = false
+    document.getElementById('configuration').hidden = false
+    resetVideoContainer()
+    log("[" + (new Date()).toISOString() + "] Stop session requested.")
+
+    if (avatarSynthesizer !== undefined && avatarSynthesizer !== null) {
+        avatarSynthesizer.close()
+        avatarSynthesizer = null
+    }
+
+    if (peerConnection !== undefined && peerConnection !== null) {
+        try {
+            peerConnection.close()
+        } catch (error) {
+            console.warn('Failed to close peer connection.', error)
+        }
+        peerConnection = null
+    }
+}
+
+window.onload = () => {
+    initializeLogUi()
+    resetVideoContainer()
+    initSettingsPersistence()
+    updateLogPlaceholderVisibility()
 }
 
 window.updataTransparentBackground = () => {
-    if (document.getElementById('transparentBackground').checked) {
-        document.body.background = './image/background.png'
-        document.getElementById('backgroundColor').value = '#00FF00FF'
-        document.getElementById('backgroundColor').disabled = true
+    const isTransparent = document.getElementById('transparentBackground').checked
+    const backgroundColorInput = document.getElementById('backgroundColor')
+    if (!backgroundColorInput) {
+        return
+    }
+    const canvas = document.getElementById('canvas')
+
+    if (isTransparent) {
+        document.body.style.backgroundImage = 'url("./image/background.png")'
+        document.body.style.backgroundColor = '#00FF00'
+        backgroundColorInput.disabled = true
+        if (!initializingSettings) {
+            backgroundColorInput.value = '#00FF00FF'
+            persistSettingValueById('backgroundColor')
+        }
+        if (canvas) {
+            canvas.hidden = false
+        }
+        hideRemoteVideo()
     } else {
-        document.body.background = ''
-        document.getElementById('backgroundColor').value = '#FFFFFFFF'
-        document.getElementById('backgroundColor').disabled = false
+        document.body.style.backgroundImage = ''
+        document.body.style.backgroundColor = ''
+        backgroundColorInput.disabled = false
+        if (!initializingSettings) {
+            backgroundColorInput.value = '#FFFFFFFF'
+            persistSettingValueById('backgroundColor')
+        }
+        if (canvas) {
+            canvas.hidden = true
+        }
+        showRemoteVideo()
+    }
+
+    if (!initializingSettings) {
+        persistSettingValueById('transparentBackground')
     }
 }
 
@@ -340,12 +841,30 @@ window.updatePrivateEndpoint = () => {
 }
 
 window.updatePhotoAvatarBox = () => {
+    if (initializingSettings) {
+        return
+    }
+
+    const characterInput = document.getElementById('talkingAvatarCharacter')
+    const styleInput = document.getElementById('talkingAvatarStyle')
+    if (!characterInput || !styleInput) {
+        return
+    }
+
     if (document.getElementById('photoAvatar').checked) {
-        document.getElementById('talkingAvatarCharacter').value = 'anika'
-        document.getElementById('talkingAvatarStyle').value = ''
+        characterInput.value = 'anika'
+        styleInput.value = ''
     } else {
-        document.getElementById('talkingAvatarCharacter').value = 'lisa'
-        document.getElementById('talkingAvatarStyle').value = 'casual-sitting'
+        characterInput.value = 'lisa'
+        styleInput.value = 'casual-sitting'
+    }
+
+    persistSettingValueById('talkingAvatarCharacter')
+    persistSettingValueById('talkingAvatarStyle')
+
+    const videoElement = document.getElementById('video')
+    if (videoElement) {
+        setVideoElementDimensions(videoElement)
     }
 }
 
@@ -355,5 +874,8 @@ window.updateCustomAvatarBox = () => {
     } else {
         document.getElementById('useBuiltInVoice').disabled = true
         document.getElementById('useBuiltInVoice').checked = false
+    }
+    if (!initializingSettings) {
+        persistSettingValueById('useBuiltInVoice')
     }
 }

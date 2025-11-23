@@ -247,6 +247,76 @@ ul {
     margin: 0 auto;
 }
 
+.log-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background-color: rgba(148, 163, 184, 0.15);
+    border-radius: 1rem;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.log-entry-info {
+    border-left: 4px solid rgba(14, 165, 233, 0.35);
+}
+
+.log-entry-warn {
+    border-left: 4px solid rgba(245, 158, 11, 0.45);
+}
+
+.log-entry-error {
+    border-left: 4px solid rgba(248, 113, 113, 0.55);
+}
+
+.log-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.log-level-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.125rem 0.6rem;
+    border-radius: 9999px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.log-level-badge-info {
+    background-color: rgba(14, 165, 233, 0.15);
+    color: #0369a1;
+}
+
+.log-level-badge-warn {
+    background-color: rgba(251, 191, 36, 0.2);
+    color: #b45309;
+}
+
+.log-level-badge-error {
+    background-color: rgba(248, 113, 113, 0.2);
+    color: #b91c1c;
+}
+
+.log-entry-timestamp {
+    font-size: 0.75rem;
+    color: #64748b;
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+}
+
+.log-entry-message {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: #1f2937;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 #subtitles {
     font-size: 22px;
 }
