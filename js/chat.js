@@ -207,7 +207,9 @@ function connectAvatar() {
         : `wss://${cogSvcRegion}.stt.speech.microsoft.com/speech/universal/v2`
     let speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(new URL(speechRecognitionEndpoint), cogSvcSubKey)
     speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
-    var sttLocales = document.getElementById('sttLocales').value.split(',')
+    const sttLocalesInput = document.getElementById('sttLocales')
+    var sttLocales = sttLocalesInput.value.split(',').map(locale => locale.trim()).filter(locale => locale.length > 0)
+    sttLocalesInput.value = sttLocales.join(',')
     var autoDetectSourceLanguageConfig = SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages(sttLocales)
     speechRecognizer = SpeechSDK.SpeechRecognizer.FromConfig(speechRecognitionConfig, autoDetectSourceLanguageConfig, SpeechSDK.AudioConfig.fromDefaultMicrophoneInput())
     logDiagnostic('SpeechRecognizer', 'Configured', {
