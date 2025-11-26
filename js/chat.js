@@ -58,6 +58,17 @@ persistedSettings.forEach((setting) => {
 })
 let localStorageEnabled = false
 
+function logDiagnostic(scope, event, payload = {}) {
+    const timestamp = new Date().toISOString()
+    const hasPayload = payload && Object.keys(payload).length > 0
+    const prefix = `[${timestamp}] [${scope}] ${event}`
+    if (hasPayload) {
+        console.log(prefix, payload)
+    } else {
+        console.log(prefix)
+    }
+}
+
 function isLocalStorageAvailable() {
     try {
         const testKey = storagePrefix + '__test'
@@ -152,6 +163,12 @@ function connectAvatar() {
     }
 
     const privateEndpointEnabled = document.getElementById('enablePrivateEndpoint').checked
+    logDiagnostic('ConnectAvatar', 'InputsValidated', {
+        region: cogSvcRegion,
+        privateEndpointEnabled,
+        origin: window.location.origin
+    })
+
     const privateEndpoint = document.getElementById('privateEndpoint').value.slice(8)
     if (privateEndpointEnabled && privateEndpoint === '') {
         alert('Please fill in the Azure Speech endpoint.')
@@ -185,16 +202,59 @@ function connectAvatar() {
         console.log("Event received: " + e.description + offsetMessage)
     }
 
-    let speechRecognitionConfig
-    if (privateEndpointEnabled) {
-        speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(new URL(`wss://${privateEndpoint}/stt/speech/universal/v2`), cogSvcSubKey) 
-    } else {
-        speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(new URL(`wss://${cogSvcRegion}.stt.speech.microsoft.com/speech/universal/v2`), cogSvcSubKey)
-    }
+    const speechRecognitionEndpoint = privateEndpointEnabled
+        ? `wss://${privateEndpoint}/stt/speech/universal/v2`
+        : `wss://${cogSvcRegion}.stt.speech.microsoft.com/speech/universal/v2`
+    let speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(new URL(speechRecognitionEndpoint), cogSvcSubKey)
     speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
     var sttLocales = document.getElementById('sttLocales').value.split(',')
     var autoDetectSourceLanguageConfig = SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages(sttLocales)
     speechRecognizer = SpeechSDK.SpeechRecognizer.FromConfig(speechRecognitionConfig, autoDetectSourceLanguageConfig, SpeechSDK.AudioConfig.fromDefaultMicrophoneInput())
+    logDiagnostic('SpeechRecognizer', 'Configured', {
+        endpoint: speechRecognitionEndpoint,
+        region: cogSvcRegion,
+        privateEndpointEnabled,
+        origin: window.location.origin,
+        locales: sttLocales
+    })
+
+    speechRecognizer.sessionStarted = (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'SessionStarted', {
+            sessionId: e.sessionId
+        })
+    }
+    speechRecognizer.sessionStopped = (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'SessionStopped', {
+            sessionId: e.sessionId
+        })
+    }
+    speechRecognizer.speechStartDetected = (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'SpeechStartDetected', {
+            sessionId: e.sessionId
+        })
+    }
+    speechRecognizer.speechEndDetected = (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'SpeechEndDetected', {
+            sessionId: e.sessionId
+        })
+    }
+    speechRecognizer.canceled = (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'Canceled', {
+            sessionId: e.sessionId,
+            reason: e.reason,
+            errorDetails: e.errorDetails,
+            errorCode: e.errorCode
+        })
+    }
+    speechRecognizer.recognizing = (s, e) => {
+        if (e.result && e.result.text) {
+            logDiagnostic('SpeechRecognizer', 'Recognizing', {
+                textPreview: e.result.text.substring(0, 80),
+                reason: e.result.reason,
+                sessionId: e.sessionId
+            })
+        }
+    }
 
     const azureOpenAIEndpoint = document.getElementById('azureOpenAIEndpoint').value
     const azureOpenAIApiKey = document.getElementById('azureOpenAIApiKey').value
@@ -247,11 +307,16 @@ function connectAvatar() {
 
 // Disconnect from avatar service
 function disconnectAvatar() {
+    logDiagnostic('AvatarSession', 'DisconnectRequested', {
+        sessionActive,
+        isSpeaking
+    })
     if (avatarSynthesizer !== undefined) {
         avatarSynthesizer.close()
     }
 
     if (speechRecognizer !== undefined) {
+        logDiagnostic('SpeechRecognizer', 'StopContinuousRecognitionAsyncInvoked')
         speechRecognizer.stopContinuousRecognitionAsync()
         speechRecognizer.close()
     }
@@ -1003,6 +1068,10 @@ window.clearChatHistory = () => {
 
 window.microphone = () => {
     lastInteractionTime = new Date()
+    logDiagnostic('MicrophoneControl', 'ToggleInvoked', {
+        buttonLabel: document.getElementById('microphone').innerHTML,
+        sessionActive
+    })
     if (document.getElementById('microphone').innerHTML === 'Stop Microphone') {
         // Stop microphone
         document.getElementById('microphone').disabled = true
@@ -1010,8 +1079,12 @@ window.microphone = () => {
             () => {
                 document.getElementById('microphone').innerHTML = 'Start Microphone'
                 document.getElementById('microphone').disabled = false
+                logDiagnostic('MicrophoneControl', 'StopRecognitionSucceeded')
             }, (err) => {
-                console.log("Failed to stop continuous recognition:", err)
+                logDiagnostic('MicrophoneControl', 'StopRecognitionFailed', {
+                    message: err && err.message ? err.message : err,
+                    stack: err && err.stack ? err.stack : undefined
+                })
                 document.getElementById('microphone').disabled = false
             })
 
@@ -1031,7 +1104,14 @@ window.microphone = () => {
     }
 
     document.getElementById('microphone').disabled = true
+    logDiagnostic('MicrophoneControl', 'StartRecognitionRequested')
     speechRecognizer.recognized = async (s, e) => {
+        logDiagnostic('SpeechRecognizer', 'RecognizedEvent', {
+            sessionId: e.sessionId,
+            reason: e.result.reason,
+            text: e.result && e.result.text ? e.result.text : '',
+            offset: e.result && typeof e.result.offset === 'number' ? e.result.offset : undefined
+        })
         if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
             let userQuery = e.result.text.trim()
             if (userQuery === '') {
@@ -1059,8 +1139,12 @@ window.microphone = () => {
         () => {
             document.getElementById('microphone').innerHTML = 'Stop Microphone'
             document.getElementById('microphone').disabled = false
+            logDiagnostic('MicrophoneControl', 'StartRecognitionSucceeded')
         }, (err) => {
-            console.log("Failed to start continuous recognition:", err)
+            logDiagnostic('MicrophoneControl', 'StartRecognitionFailed', {
+                message: err && err.message ? err.message : err,
+                stack: err && err.stack ? err.stack : undefined
+            })
             document.getElementById('microphone').disabled = false
         })
 }
