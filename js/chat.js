@@ -133,6 +133,12 @@ function initSettingsPersistence() {
             } else {
                 element.value = storedValue
             }
+            if (element.tagName === 'SELECT') {
+                const hasOption = Array.from(element.options).some(option => option.value === element.value)
+                if (!hasOption && element.options.length > 0) {
+                    element.value = element.options[0].value
+                }
+            }
         }
         const eventName = setting.event || (setting.type === 'checkbox' ? 'change' : 'change')
         element.addEventListener(eventName, () => {
@@ -150,6 +156,9 @@ function initSettingsPersistence() {
     }
     if (document.getElementById('useLocalVideoForIdle')) {
         window.updateLocalVideoForIdle()
+    }
+    if (document.getElementById('photoAvatar')) {
+        window.updatePhotoAvatarBox()
     }
 }
 
@@ -186,7 +195,7 @@ function connectAvatar() {
     }
     speechSynthesisConfig.endpointId = document.getElementById('customVoiceEndpointId').value
 
-    const talkingAvatarCharacter = document.getElementById('talkingAvatarCharacter').value
+    const talkingAvatarCharacter = document.getElementById('talkingAvatarCharacter').value.trim().toLowerCase()
     const talkingAvatarStyle = document.getElementById('talkingAvatarStyle').value
     const avatarConfig = new SpeechSDK.AvatarConfig(talkingAvatarCharacter, talkingAvatarStyle)
     avatarConfig.photoAvatarBaseModel = document.getElementById('photoAvatar').checked ? 'vasa-1' : ''
@@ -1014,6 +1023,16 @@ function checkLastSpeak() {
 
 window.onload = () => {
     initSettingsPersistence()
+    const photoAvatarSelect = document.getElementById('photoAvatarCharacterSelect')
+    if (photoAvatarSelect) {
+        photoAvatarSelect.addEventListener('change', () => {
+            const characterInput = document.getElementById('talkingAvatarCharacter')
+            if (characterInput) {
+                characterInput.value = photoAvatarSelect.value
+                persistSettingValueById('talkingAvatarCharacter')
+            }
+        })
+    }
     updateChatHistoryPlaceholderVisibility()
     setInterval(() => {
         checkHung()
@@ -1218,15 +1237,51 @@ window.updatePrivateEndpoint = () => {
 }
 
 window.updatePhotoAvatarBox = () => {
-    if (document.getElementById('photoAvatar').checked) {
-        document.getElementById('talkingAvatarCharacter').value = 'anika'
-        document.getElementById('talkingAvatarStyle').value = ''
-    } else {
-        document.getElementById('talkingAvatarCharacter').value = 'lisa'
-        document.getElementById('talkingAvatarStyle').value = 'casual-sitting'
+    const photoAvatarCheckbox = document.getElementById('photoAvatar')
+    const characterInput = document.getElementById('talkingAvatarCharacter')
+    const characterSelect = document.getElementById('photoAvatarCharacterSelect')
+    const styleInput = document.getElementById('talkingAvatarStyle')
+    if (!photoAvatarCheckbox || !characterInput || !characterSelect || !styleInput) {
+        return
     }
-    persistSettingValueById('talkingAvatarCharacter')
-    persistSettingValueById('talkingAvatarStyle')
+
+    const isPhotoAvatar = photoAvatarCheckbox.checked
+    const options = Array.from(characterSelect.options).map(option => option.value)
+
+    if (isPhotoAvatar) {
+        characterInput.classList.add('hidden')
+        characterSelect.classList.remove('hidden')
+
+        const normalizedValue = characterInput.value.trim().toLowerCase()
+        const selectedValue = options.includes(normalizedValue) ? normalizedValue : 'anika'
+        characterSelect.value = selectedValue
+        if (characterInput.value !== selectedValue) {
+            characterInput.value = selectedValue
+            persistSettingValueById('talkingAvatarCharacter')
+        }
+
+        if (styleInput.value !== '') {
+            styleInput.value = ''
+            persistSettingValueById('talkingAvatarStyle')
+        }
+    } else {
+        characterSelect.classList.add('hidden')
+        characterInput.classList.remove('hidden')
+
+        const normalizedInput = characterInput.value.trim().toLowerCase()
+        const dropdownValue = characterSelect.value
+        if (normalizedInput === '' || normalizedInput === dropdownValue) {
+            if (characterInput.value !== 'lisa') {
+                characterInput.value = 'lisa'
+                persistSettingValueById('talkingAvatarCharacter')
+            }
+        }
+
+        if (styleInput.value.trim() === '') {
+            styleInput.value = 'casual-sitting'
+            persistSettingValueById('talkingAvatarStyle')
+        }
+    }
 }
 
 window.updateCustomAvatarBox = () => {
